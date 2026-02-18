@@ -26,6 +26,7 @@ render: fn(t: ref Tk->Toplevel, tk: Tk, display: ref Display, backing: ref Image
 	imgname: string, imgmade: int, bpp: int): (ref Image, int, int, int, int, int);
 resample: fn(src: array of byte, dst: array of byte, w_src, w_dst, depth: int, zoom: real);
 writeimage_uncompressed: fn(fd: ref Sys->FD, i: ref Image): int;
+get_new_dims: fn(ctxt: ref Draw->Context): (int, int);
 
 
 render(t: ref Tk->Toplevel, tk: Tk, display: ref Display, backing: ref Image, zoom: real,
@@ -173,6 +174,67 @@ writeimage_uncompressed(fd: ref Sys->FD, i: ref Image): int
 	return 0;
 }
 
+get_new_dims(ctxt: ref Draw->Context): (int, int)
+{
+	(t, nil) := tkclient->toplevel(ctxt, "", "Image Size", Tkclient->Appl);
+	
+	cmd := chan of string;
+	tk->namechan(t, cmd, "cmd");
+
+	tk->cmd(t, "frame .f");
+	tk->cmd(t, "label .f.lw -text Width:");
+	tk->cmd(t, "entry .f.ew -width 55");
+	tk->cmd(t, ".f.ew insert 0 " + string CANVAS_WIDTH);
+	tk->cmd(t, "label .f.lh -text Height:");
+	tk->cmd(t, "entry .f.eh -width 55");
+	tk->cmd(t, ".f.eh insert 0 " + string CANVAS_HEIGHT);
+	tk->cmd(t, "pack .f.lw .f.ew .f.lh .f.eh -side left -padx 5 -pady 5");
+	tk->cmd(t, "pack .f -side top");
+	
+	tk->cmd(t, "frame .b");
+	tk->cmd(t, "button .b.ok -text OK -command {send cmd ok}");
+	tk->cmd(t, "button .b.cancel -text Cancel -command {send cmd cancel}");
+	tk->cmd(t, "pack .b.ok .b.cancel -side left -padx 5 -pady 5");
+	tk->cmd(t, "pack .b -side bottom");
+	
+	tk->cmd(t, "focus .f.ew");
+	tk->cmd(t, "bind .f.ew <Key-Return> {send cmd ok}");
+	tk->cmd(t, "bind .f.eh <Key-Return> {send cmd ok}");
+
+	tkclient->onscreen(t, nil);
+	tkclient->startinput(t, "kbd"::"ptr"::nil);
+
+	w := 0;
+	h := 0;
+	
+	loop: for(;;) {
+		alt {
+		c := <-cmd =>
+			case c {
+			"ok" =>
+				w = int tk->cmd(t, ".f.ew get");
+				h = int tk->cmd(t, ".f.eh get");
+				if(w <= 0) w = CANVAS_WIDTH;
+				if(h <= 0) h = CANVAS_HEIGHT;
+				break loop;
+			"cancel" =>
+				w = 0;
+				h = 0;
+				break loop;
+			}
+		c := <-t.ctxt.kbd =>
+			tk->keyboard(t, c);
+		c := <-t.ctxt.ptr =>
+			tk->pointer(t, *c);
+		s := <-t.ctxt.ctl or
+		s = <-t.wreq =>
+			tkclient->wmctl(t, s);
+		}
+	}
+	tk->cmd(t, "destroy .");
+	return (w, h);
+}
+
 
 init(ctxt: ref Draw->Context, nil: list of string)
 {
@@ -292,12 +354,15 @@ init(ctxt: ref Draw->Context, nil: list of string)
 			(nil, args) := sys->tokenize(val, " ");
 			case hd args {
 			"new" =>
-				tk->cmd(t, ".cf.c delete all");
-				backing = display.newimage(Rect((0, 0), (CANVAS_WIDTH, CANVAS_HEIGHT)), Draw->RGB24, 0, Draw->White);
-				zoom = 1.0;
-				zoomtxt = "Zoom: 100%";
-				tk->cmd(t, ".zb.zl configure -text {" + zoomtxt + "}");
-				(view, vieww, viewh, imgmade, scrollw, scrollh) = render(t, tk, display, backing, zoom, imgname, imgmade, bpp);
+				(nw, nh) := get_new_dims(ctxt);
+				if(nw > 0 && nh > 0) {
+					tk->cmd(t, ".cf.c delete all");
+					backing = display.newimage(Rect((0, 0), (nw, nh)), Draw->RGB24, 0, Draw->White);
+					zoom = 1.0;
+					zoomtxt = "Zoom: 100%";
+					tk->cmd(t, ".zb.zl configure -text {" + zoomtxt + "}");
+					(view, vieww, viewh, imgmade, scrollw, scrollh) = render(t, tk, display, backing, zoom, imgname, imgmade, bpp);
+				}
 			"save" =>
 				fname := selectfile->filename(ctxt, t.image, "Save .bit image", "*.bit"::nil, "");
 				if(fname != "") {
