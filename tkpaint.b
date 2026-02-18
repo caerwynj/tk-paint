@@ -48,8 +48,6 @@ init(ctxt: ref Draw->Context, nil: list of string)
 	# Main layout
 	tk->cmd(t, "frame .mb -relief raised -bd 2");
 	tk->cmd(t, "pack .mb -side top -fill x");
-	tk->cmd(t, "frame .m -relief raised -bd 2");
-	tk->cmd(t, "pack .m -side top -fill x");
 
 	FONT := "-font /fonts/lucida/unicode.10.font";
 	FONT = "";
@@ -67,19 +65,6 @@ init(ctxt: ref Draw->Context, nil: list of string)
 	tk->cmd(t, ".mb.view.menu add cascade -label Zoom -menu .mb.view.menu.zoom");
 	tk->cmd(t, ".mb.view.menu.zoom add command -label {Zoom In} -command {send cmd zoomin}");
 	tk->cmd(t, ".mb.view.menu.zoom add command -label {Zoom Out} -command {send cmd zoomout}");
-
-	# File controls
-	tk->cmd(t, "label .m.v -text {v3} -fg #888888 " + FONT);
-	tk->cmd(t, "pack .m.v -side right -padx 5");
-	tk->cmd(t, "entry .m.e -width 50 " + FONT);
-	tk->cmd(t, "pack .m.e -side left");
-	tk->cmd(t, ".m.e insert 0 {out.bit}");
-	tk->cmd(t, "button .m.save -text Save -command {send cmd save} " + FONT);
-	tk->cmd(t, "pack .m.save -side left");
-	tk->cmd(t, "button .m.open -text Open -command {send cmd open} " + FONT);
-	tk->cmd(t, "pack .m.open -side left");
-	tk->cmd(t, "button .m.clear -text Clear -command {send cmd clear} " + FONT);
-	tk->cmd(t, "pack .m.clear -side left");
 
 	# Color palette
 	tk->cmd(t, "frame .p -relief raised -bd 2");
@@ -133,14 +118,12 @@ init(ctxt: ref Draw->Context, nil: list of string)
 			(nil, args) := sys->tokenize(val, " ");
 			case hd args {
 			"new" =>
-				tk->cmd(t, ".m.e delete 0 end");
-				tk->cmd(t, ".m.e insert 0 {out.bit}");
 				tk->cmd(t, ".c delete all");
 				backing.draw(backing.r, display.white, nil, (0, 0));
 				zoom = 1.0;
 			"save" =>
-				fname := tk->cmd(t, ".m.e get");
-				if(fname != nil) {
+				fname := selectfile->filename(ctxt, t.image, "Save .bit image", "*.bit"::nil, "");
+				if(fname != "") {
 					fd := sys->create(fname, Sys->OWRITE, 8r666);
 					if(fd != nil)
 						display.writeimage(fd, backing);
@@ -148,8 +131,6 @@ init(ctxt: ref Draw->Context, nil: list of string)
 			"open" =>
 				fname := selectfile->filename(ctxt, t.image, "Open .bit image", "*.bit"::nil, "");
 				if(fname != "") {
-					tk->cmd(t, ".m.e delete 0 end");
-					tk->cmd(t, ".m.e insert 0 {" + fname + "}");
 					fd := sys->open(fname, Sys->OREAD);
 					if(fd != nil) {
 						nim := display.readimage(fd);
