@@ -19,8 +19,8 @@ Tkpaint: module
 	init: fn(ctxt: ref Draw->Context, argv: list of string);
 };
 
-CANVAS_WIDTH: con 400;
-CANVAS_HEIGHT: con 300;
+CANVAS_WIDTH: con 16;
+CANVAS_HEIGHT: con 16;
 
 render: fn(t: ref Tk->Toplevel, tk: Tk, display: ref Display, backing: ref Image, zoom: real,
 	imgname: string, imgmade: int, bpp: int): (ref Image, int, int, int, int, int);
@@ -68,6 +68,23 @@ render(t: ref Tk->Toplevel, tk: Tk, display: ref Display, backing: ref Image, zo
 				last_sy = sy;
 			}
 			view.writepixels(Rect((0, y), (vieww, y + 1)), dst_row);
+		}
+
+		# Draw gridlines if zoomed in
+		if(zoom >= 4.0) {
+			gridcolor := display.rgb(128, 128, 128);
+			# Vertical lines
+			for(x := 1; x < vieww; x++) {
+				if(int(real x / zoom) != int(real (x-1) / zoom)) {
+					view.line((x, 0), (x, viewh), 0, 0, 0, gridcolor, (0, 0));
+				}
+			}
+			# Horizontal lines
+			for(y := 1; y < viewh; y++) {
+				if(int(real y / zoom) != int(real (y-1) / zoom)) {
+					view.line((0, y), (vieww, y), 0, 0, 0, gridcolor, (0, 0));
+				}
+			}
 		}
 	}
 
@@ -200,7 +217,7 @@ init(ctxt: ref Draw->Context, nil: list of string)
 	tk->cmd(t, "pack .cf -side bottom -fill both -expand 1");
 	tk->cmd(t, "scrollbar .cf.x -orient horizontal -command {.cf.c xview}");
 	tk->cmd(t, "scrollbar .cf.y -orient vertical -command {.cf.c yview}");
-	tk->cmd(t, "canvas .cf.c -width " + string CANVAS_WIDTH + " -height " + string CANVAS_HEIGHT + " -bg white -xscrollcommand {.cf.x set} -yscrollcommand {.cf.y set}");
+	tk->cmd(t, "canvas .cf.c -width " + string CANVAS_WIDTH + " -height " + string CANVAS_HEIGHT + " -bg gray -xscrollcommand {.cf.x set} -yscrollcommand {.cf.y set}");
 	tk->cmd(t, "grid .cf.c .cf.y -sticky nsew");
 	tk->cmd(t, "grid .cf.x - -sticky ew");
 	tk->cmd(t, "grid columnconfigure .cf 0 -weight 1");
@@ -252,7 +269,7 @@ init(ctxt: ref Draw->Context, nil: list of string)
 			case hd args {
 			"new" =>
 				tk->cmd(t, ".cf.c delete all");
-				backing.draw(backing.r, display.white, nil, (0, 0));
+				backing = display.newimage(Rect((0, 0), (CANVAS_WIDTH, CANVAS_HEIGHT)), display.image.chans, 0, Draw->White);
 				zoom = 1.0;
 				zoomtxt = "Zoom: 100%";
 				tk->cmd(t, ".zb.zl configure -text {" + zoomtxt + "}");
@@ -302,8 +319,8 @@ init(ctxt: ref Draw->Context, nil: list of string)
 				}
 			"zoomin" =>
 				newz := zoom * 1.25;
-				if(newz > 4.0)
-					newz = 4.0;
+				if(newz > 16.0)
+					newz = 16.0;
 				if(newz != zoom) {
 					zoom = newz;
 					zoomtxt = "Zoom: " + string int (zoom * 100.0) + "%";
@@ -329,7 +346,7 @@ init(ctxt: ref Draw->Context, nil: list of string)
 					# plot point 
 					rx := int (real lastx / zoom);
 					ry := int (real lasty / zoom);
-					backing.draw(Rect((rx, ry), (rx + 5, ry + 5)), drawcolor, nil, (0, 0));
+					backing.draw(Rect((rx, ry), (rx + 1, ry + 1)), drawcolor, nil, (0, 0));
 					if(zoom == 1.0) {
 						tk->cmd(t, ".cf.c create line " + string lastx + " " + string lasty + " " + string lastx + " " + string lasty + " -fill " + tkcolor);
 					} else {
@@ -359,3 +376,4 @@ init(ctxt: ref Draw->Context, nil: list of string)
 		}
 	}
 }
+
