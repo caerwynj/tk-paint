@@ -66,6 +66,14 @@ init(ctxt: ref Draw->Context, nil: list of string)
 	tk->cmd(t, ".mb.view.menu.zoom add command -label {Zoom In} -command {send cmd zoomin}");
 	tk->cmd(t, ".mb.view.menu.zoom add command -label {Zoom Out} -command {send cmd zoomout}");
 
+	# Zoom controls
+	tk->cmd(t, "frame .zb -relief raised -bd 2");
+	tk->cmd(t, "pack .zb -side top -fill x");
+	tk->cmd(t, "label .zb.zl -text {Zoom: 100%}");
+	tk->cmd(t, "button .zb.zi -text {Zoom In} -command {send cmd zoomin}");
+	tk->cmd(t, "button .zb.zo -text {Zoom Out} -command {send cmd zoomout}");
+	tk->cmd(t, "pack .zb.zl .zb.zi .zb.zo -side left");
+
 	# Color palette
 	tk->cmd(t, "frame .p -relief raised -bd 2");
 	tk->cmd(t, "pack .p -side top -fill x");
@@ -76,13 +84,20 @@ init(ctxt: ref Draw->Context, nil: list of string)
 		tk->cmd(t, "pack .p." + c + " -side left");
 	}
 
-	# Drawing Canvas
-	tk->cmd(t, "canvas .c -width " + string CANVAS_WIDTH + " -height " + string CANVAS_HEIGHT + " -bg white");
-	tk->cmd(t, "pack .c -side bottom -fill both -expand 1");
+	# Drawing Canvas + scrollbars
+	tk->cmd(t, "frame .cf");
+	tk->cmd(t, "pack .cf -side bottom -fill both -expand 1");
+	tk->cmd(t, "scrollbar .cf.x -orient horizontal -command {.cf.c xview}");
+	tk->cmd(t, "scrollbar .cf.y -orient vertical -command {.cf.c yview}");
+	tk->cmd(t, "canvas .cf.c -width " + string CANVAS_WIDTH + " -height " + string CANVAS_HEIGHT + " -bg white -xscrollcommand {.cf.x set} -yscrollcommand {.cf.y set}");
+	tk->cmd(t, "grid .cf.c .cf.y -sticky nsew");
+	tk->cmd(t, "grid .cf.x - -sticky ew");
+	tk->cmd(t, "grid columnconfigure .cf 0 -weight 1");
+	tk->cmd(t, "grid rowconfigure .cf 0 -weight 1");
 
 	# Bindings
-	tk->cmd(t, "bind .c <Button-1> {send cmd b1down %x %y}");
-	tk->cmd(t, "bind .c <B1-Motion> {send cmd b1move %x %y}");
+	tk->cmd(t, "bind .cf.c <Button-1> {send cmd b1down %x %y}");
+	tk->cmd(t, "bind .cf.c <B1-Motion> {send cmd b1move %x %y}");
 
 	tkclient->onscreen(t, nil);
 	tkclient->startinput(t, "ptr"::nil);
@@ -94,6 +109,7 @@ init(ctxt: ref Draw->Context, nil: list of string)
 		sys->fprint(sys->fildes(2), "tkpaint: failed to allocate backing image\n");
 		raise "fail:nomem";
 	}
+	tk->cmd(t, ".cf.c configure -scrollregion {0 0 " + string CANVAS_WIDTH + " " + string CANVAS_HEIGHT + "}");
 
 	# State
 	lastx, lasty: int;
@@ -101,6 +117,8 @@ init(ctxt: ref Draw->Context, nil: list of string)
 	tkcolor := "black";
 	imgname := "paintimg";
 	zoom := 1.0;
+	scrollw, scrollh: int;
+	zoomtxt := "Zoom: 100%";
 
 	# Loop
 	stop := chan of int;
@@ -118,9 +136,14 @@ init(ctxt: ref Draw->Context, nil: list of string)
 			(nil, args) := sys->tokenize(val, " ");
 			case hd args {
 			"new" =>
-				tk->cmd(t, ".c delete all");
+				tk->cmd(t, ".cf.c delete all");
 				backing.draw(backing.r, display.white, nil, (0, 0));
 				zoom = 1.0;
+				zoomtxt = "Zoom: 100%";
+				tk->cmd(t, ".zb.zl configure -text {" + zoomtxt + "}");
+				scrollw = backing.r.max.x;
+				scrollh = backing.r.max.y;
+				tk->cmd(t, ".cf.c configure -scrollregion {0 0 " + string scrollw + " " + string scrollh + "}");
 			"save" =>
 				fname := selectfile->filename(ctxt, t.image, "Save .bit image", "*.bit"::nil, "");
 				if(fname != "") {
@@ -137,20 +160,25 @@ init(ctxt: ref Draw->Context, nil: list of string)
 						if(nim != nil) {
 							backing = nim;
 							# Try to show it in Tk 
-							tk->cmd(t, ".c delete all");
+							tk->cmd(t, ".cf.c delete all");
 							tk->cmd(t, "image delete " + imgname);
 							err := tk->cmd(t, "image create bitmap " + imgname);
 							if(err == nil || len err == 0 || err[0] != '!') {
 								err = tk->putimage(t, imgname, backing, nil);
 								if(err == nil || len err == 0 || err[0] != '!')
-									tk->cmd(t, ".c create image 0 0 -anchor nw -image " + imgname);
+									tk->cmd(t, ".cf.c create image 0 0 -anchor nw -image " + imgname);
 							}
 							zoom = 1.0;
+							zoomtxt = "Zoom: 100%";
+							tk->cmd(t, ".zb.zl configure -text {" + zoomtxt + "}");
+							scrollw = backing.r.max.x;
+							scrollh = backing.r.max.y;
+							tk->cmd(t, ".cf.c configure -scrollregion {0 0 " + string scrollw + " " + string scrollh + "}");
 						}
 					}
 				}
 			"clear" =>
-				tk->cmd(t, ".c delete all");
+				tk->cmd(t, ".cf.c delete all");
 				backing.draw(backing.r, display.white, nil, (0, 0));
 			"color" =>
 				tkcolor = hd tl args;
@@ -174,8 +202,13 @@ init(ctxt: ref Draw->Context, nil: list of string)
 					newz = 4.0;
 				if(newz != zoom) {
 					f := newz/zoom;
-					tk->cmd(t, ".c scale all 0 0 " + string f + " " + string f);
+					tk->cmd(t, ".cf.c scale all 0 0 " + string f + " " + string f);
 					zoom = newz;
+					zoomtxt = "Zoom: " + string int (zoom * 100.0) + "%";
+					tk->cmd(t, ".zb.zl configure -text {" + zoomtxt + "}");
+					scrollw = int (real backing.r.max.x * zoom);
+					scrollh = int (real backing.r.max.y * zoom);
+					tk->cmd(t, ".cf.c configure -scrollregion {0 0 " + string scrollw + " " + string scrollh + "}");
 				}
 			"zoomout" =>
 				newz := zoom / 1.25;
@@ -183,8 +216,13 @@ init(ctxt: ref Draw->Context, nil: list of string)
 					newz = 0.25;
 				if(newz != zoom) {
 					f := newz/zoom;
-					tk->cmd(t, ".c scale all 0 0 " + string f + " " + string f);
+					tk->cmd(t, ".cf.c scale all 0 0 " + string f + " " + string f);
 					zoom = newz;
+					zoomtxt = "Zoom: " + string int (zoom * 100.0) + "%";
+					tk->cmd(t, ".zb.zl configure -text {" + zoomtxt + "}");
+					scrollw = int (real backing.r.max.x * zoom);
+					scrollh = int (real backing.r.max.y * zoom);
+					tk->cmd(t, ".cf.c configure -scrollregion {0 0 " + string scrollw + " " + string scrollh + "}");
 				}
 			"b1down" =>
 				if(len args >= 3) {
@@ -196,7 +234,7 @@ init(ctxt: ref Draw->Context, nil: list of string)
 					rx := int (real lastx / zoom);
 					ry := int (real lasty / zoom);
 					backing.draw(Rect((rx, ry), (rx + 5, ry + 5)), drawcolor, nil, (0, 0));
-					tk->cmd(t, ".c create line " + string lastx + " " + string lasty + " " + string lastx + " " + string lasty + " -fill " + tkcolor);
+					tk->cmd(t, ".cf.c create line " + string lastx + " " + string lasty + " " + string lastx + " " + string lasty + " -fill " + tkcolor);
 				}
 			"b1move" =>
 				if(len args >= 3) {
@@ -211,7 +249,7 @@ init(ctxt: ref Draw->Context, nil: list of string)
 					backing.line((rx0, ry0), (rx1, ry1), 0, 0, 0, drawcolor, (0, 0));
 					lastx = x;
 					lasty = y;
-					tk->cmd(t, ".c create line " + string lastx + " " + string lasty + " " + string x + " " + string y + " -fill " + tkcolor);
+					tk->cmd(t, ".cf.c create line " + string lastx + " " + string lasty + " " + string x + " " + string y + " -fill " + tkcolor);
 				}
 			}
 		}
