@@ -4,7 +4,7 @@ include "sys.m";
 sys: Sys;
 include "draw.m";
 draw: Draw;
-Display, Image, Rect, Point: import draw;
+Display, Image, Rect, Point, Chans: import draw;
 include "tk.m";
 tk: Tk;
 include "tkclient.m";
@@ -25,6 +25,7 @@ CANVAS_HEIGHT: con 16;
 render: fn(t: ref Tk->Toplevel, tk: Tk, display: ref Display, backing: ref Image, zoom: real,
 	imgname: string, imgmade: int, bpp: int): (ref Image, int, int, int, int, int);
 resample: fn(src: array of byte, dst: array of byte, w_src, w_dst, depth: int, zoom: real);
+writeimage_uncompressed: fn(fd: ref Sys->FD, i: ref Image): int;
 
 
 render(t: ref Tk->Toplevel, tk: Tk, display: ref Display, backing: ref Image, zoom: real,
@@ -150,6 +151,29 @@ resample(src: array of byte, dst: array of byte, nil, w_dst: int, depth: int, zo
 	}
 }
 
+writeimage_uncompressed(fd: ref Sys->FD, i: ref Image): int
+{
+	# Write uncompressed header: chan minx miny maxx maxy
+	header := sys->sprint("%11s %11d %11d %11d %11d ", 
+		i.chans.text(), i.r.min.x, i.r.min.y, i.r.max.x, i.r.max.y);
+	d := array of byte header;
+	if(sys->write(fd, d, len d) != len d)
+		return -1;
+
+	# Write pixel data row by row
+	depth := i.depth;
+	stride := (i.r.dx() * depth + 7) / 8;
+	buf := array[stride] of byte;
+	
+	for(y := i.r.min.y; y < i.r.max.y; y++) {
+		i.readpixels(Rect((i.r.min.x, y), (i.r.max.x, y+1)), buf);
+		if(sys->write(fd, buf, len buf) != len buf)
+			return -1;
+	}
+	return 0;
+}
+
+
 init(ctxt: ref Draw->Context, nil: list of string)
 {
 	sys = load Sys Sys->PATH;
@@ -168,7 +192,7 @@ init(ctxt: ref Draw->Context, nil: list of string)
 		sys->fprint(sys->fildes(2), "tkpaint: no window context\n");
 		raise "fail:bad context";
 	}
-	(t, menubut) := tkclient->toplevel(ctxt, "", "Tk Paint", 0);
+	(t, menubut) := tkclient->toplevel(ctxt, "", "Tk Paint", Tkclient->Appl);
 
 	cmdchan := chan of string;
 	tk->namechan(t, cmdchan, "cmd");
@@ -232,7 +256,7 @@ init(ctxt: ref Draw->Context, nil: list of string)
 
 	# Backing image for saving
 	display := ctxt.display;
-	backing := display.newimage(Rect((0, 0), (CANVAS_WIDTH, CANVAS_HEIGHT)), display.image.chans, 0, Draw->White);
+	backing := display.newimage(Rect((0, 0), (CANVAS_WIDTH, CANVAS_HEIGHT)), Draw->RGB24, 0, Draw->White);
 	if(backing == nil) {
 		sys->fprint(sys->fildes(2), "tkpaint: failed to allocate backing image\n");
 		raise "fail:nomem";
@@ -269,7 +293,7 @@ init(ctxt: ref Draw->Context, nil: list of string)
 			case hd args {
 			"new" =>
 				tk->cmd(t, ".cf.c delete all");
-				backing = display.newimage(Rect((0, 0), (CANVAS_WIDTH, CANVAS_HEIGHT)), display.image.chans, 0, Draw->White);
+				backing = display.newimage(Rect((0, 0), (CANVAS_WIDTH, CANVAS_HEIGHT)), Draw->RGB24, 0, Draw->White);
 				zoom = 1.0;
 				zoomtxt = "Zoom: 100%";
 				tk->cmd(t, ".zb.zl configure -text {" + zoomtxt + "}");
@@ -279,7 +303,7 @@ init(ctxt: ref Draw->Context, nil: list of string)
 				if(fname != "") {
 					fd := sys->create(fname, Sys->OWRITE, 8r666);
 					if(fd != nil)
-						display.writeimage(fd, backing);
+						writeimage_uncompressed(fd, backing);
 				}
 			"open" =>
 				fname := selectfile->filename(ctxt, t.image, "Open .bit image", "*.bit"::nil, "");
@@ -288,7 +312,10 @@ init(ctxt: ref Draw->Context, nil: list of string)
 					if(fd != nil) {
 						nim := display.readimage(fd);
 						if(nim != nil) {
-							backing = nim;
+							# Create a fresh backing image to ensure consistent format and coordinates
+							backing = display.newimage(Rect((0, 0), (CANVAS_WIDTH, CANVAS_HEIGHT)), Draw->RGB24, 0, Draw->White);
+							backing.draw(backing.r, nim, nil, nim.r.min);
+							
 							zoom = 1.0;
 							zoomtxt = "Zoom: 100%";
 							tk->cmd(t, ".zb.zl configure -text {" + zoomtxt + "}");
