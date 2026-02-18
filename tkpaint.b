@@ -22,6 +22,117 @@ Tkpaint: module
 CANVAS_WIDTH: con 400;
 CANVAS_HEIGHT: con 300;
 
+render: fn(t: ref Tk->Toplevel, tk: Tk, display: ref Display, backing: ref Image, zoom: real,
+	imgname: string, imgmade: int, bpp: int): (ref Image, int, int, int, int, int);
+resample: fn(src: array of byte, dst: array of byte, w_src, w_dst, depth: int, zoom: real);
+
+
+render(t: ref Tk->Toplevel, tk: Tk, display: ref Display, backing: ref Image, zoom: real,
+	imgname: string, imgmade: int, bpp: int): (ref Image, int, int, int, int, int)
+{
+	if(backing == nil)
+		return (nil, 0, 0, imgmade, 0, 0);
+
+	vieww := int (real backing.r.max.x * zoom);
+	viewh := int (real backing.r.max.y * zoom);
+	if(vieww < 1)
+		vieww = 1;
+	if(viewh < 1)
+		viewh = 1;
+
+	view: ref Image;
+	if(zoom == 1.0) {
+		view = backing;
+	} else {
+		view = display.newimage(Rect((0, 0), (vieww, viewh)), backing.chans, 0, Draw->White);
+		if(view == nil)
+			return (nil, vieww, viewh, imgmade, vieww, viewh);
+		
+		# Optimization: Process row by row instead of pixel by pixel
+		depth := backing.depth;
+		src_stride := (backing.r.max.x * depth + 7) / 8;
+		dst_stride := (vieww * depth + 7) / 8;
+		
+		src_row := array[src_stride] of byte;
+		dst_row := array[dst_stride] of byte;
+		
+		last_sy := -1;
+		
+		for(y := 0; y < viewh; y++) {
+			sy := int (real y / zoom);
+			if(sy >= backing.r.max.y) break;
+
+			if(sy != last_sy) {
+				backing.readpixels(Rect((0, sy), (backing.r.max.x, sy + 1)), src_row);
+				resample(src_row, dst_row, backing.r.max.x, vieww, depth, zoom);
+				last_sy = sy;
+			}
+			view.writepixels(Rect((0, y), (vieww, y + 1)), dst_row);
+		}
+	}
+
+	if(imgmade == 0) {
+		err := tk->cmd(t, "image create bitmap " + imgname);
+		if(err == nil || len err == 0 || err[0] != '!') {
+			imgmade = 1;
+		} else {
+			return (view, vieww, viewh, imgmade, vieww, viewh);
+		}
+	}
+
+	tk->cmd(t, ".cf.c delete all");
+	err := tk->putimage(t, imgname, view, nil);
+	if(err == nil || len err == 0 || err[0] != '!')
+		tk->cmd(t, ".cf.c create image 0 0 -anchor nw -image " + imgname);
+
+	tk->cmd(t, ".cf.c configure -scrollregion {0 0 " + string vieww + " " + string viewh + "}");
+	return (view, vieww, viewh, imgmade, vieww, viewh);
+}
+
+resample(src: array of byte, dst: array of byte, nil, w_dst: int, depth: int, zoom: real)
+{
+	# Nearest neighbor resampling
+	# Note: This implementation assumes typical depths (1, 2, 4, 8, 16, 24, 32)
+	
+	if(depth >= 8) {
+		bpp := depth / 8;
+		for(x := 0; x < w_dst; x++) {
+			sx := int(real x / zoom);
+			# Bound check is implicitly handled by zoom/width logic but good to be safe if desired
+			# Copy pixel
+			src_idx := sx * bpp;
+			dst_idx := x * bpp;
+			if(src_idx + bpp <= len src && dst_idx + bpp <= len dst)
+				dst[dst_idx:] = src[src_idx:src_idx+bpp];
+		}
+	} else {
+		# Sub-byte depths (1, 2, 4 bpp)
+		# Pixels are packed.
+		pixels_per_byte := 8 / depth;
+		mask := (1 << depth) - 1;
+		
+		# Clear dst buffer first as we OR in bits
+		for(i := 0; i < len dst; i++) dst[i] = byte 0;
+
+		for(x := 0; x < w_dst; x++) {
+			sx := int(real x / zoom);
+			
+			# Read source pixel
+			src_byte_idx := (sx * depth) / 8;
+			src_bit_shift := 8 - ((sx * depth) % 8) - depth;
+			
+			pixel := (int src[src_byte_idx] >> src_bit_shift) & mask;
+			
+			# Write dest pixel
+			dst_byte_idx := (x * depth) / 8;
+			dst_bit_shift := 8 - ((x * depth) % 8) - depth;
+			
+			if(dst_byte_idx < len dst)
+				dst[dst_byte_idx] |= byte (pixel << dst_bit_shift);
+		}
+	}
+}
+
 init(ctxt: ref Draw->Context, nil: list of string)
 {
 	sys = load Sys Sys->PATH;
@@ -109,7 +220,6 @@ init(ctxt: ref Draw->Context, nil: list of string)
 		sys->fprint(sys->fildes(2), "tkpaint: failed to allocate backing image\n");
 		raise "fail:nomem";
 	}
-	tk->cmd(t, ".cf.c configure -scrollregion {0 0 " + string CANVAS_WIDTH + " " + string CANVAS_HEIGHT + "}");
 
 	# State
 	lastx, lasty: int;
@@ -119,6 +229,11 @@ init(ctxt: ref Draw->Context, nil: list of string)
 	zoom := 1.0;
 	scrollw, scrollh: int;
 	zoomtxt := "Zoom: 100%";
+	view: ref Image;
+	vieww, viewh: int;
+	imgmade := 0;
+	bpp := (backing.depth + 7) / 8;
+	(view, vieww, viewh, imgmade, scrollw, scrollh) = render(t, tk, display, backing, zoom, imgname, imgmade, bpp);
 
 	# Loop
 	stop := chan of int;
@@ -141,9 +256,7 @@ init(ctxt: ref Draw->Context, nil: list of string)
 				zoom = 1.0;
 				zoomtxt = "Zoom: 100%";
 				tk->cmd(t, ".zb.zl configure -text {" + zoomtxt + "}");
-				scrollw = backing.r.max.x;
-				scrollh = backing.r.max.y;
-				tk->cmd(t, ".cf.c configure -scrollregion {0 0 " + string scrollw + " " + string scrollh + "}");
+				(view, vieww, viewh, imgmade, scrollw, scrollh) = render(t, tk, display, backing, zoom, imgname, imgmade, bpp);
 			"save" =>
 				fname := selectfile->filename(ctxt, t.image, "Save .bit image", "*.bit"::nil, "");
 				if(fname != "") {
@@ -159,27 +272,18 @@ init(ctxt: ref Draw->Context, nil: list of string)
 						nim := display.readimage(fd);
 						if(nim != nil) {
 							backing = nim;
-							# Try to show it in Tk 
-							tk->cmd(t, ".cf.c delete all");
-							tk->cmd(t, "image delete " + imgname);
-							err := tk->cmd(t, "image create bitmap " + imgname);
-							if(err == nil || len err == 0 || err[0] != '!') {
-								err = tk->putimage(t, imgname, backing, nil);
-								if(err == nil || len err == 0 || err[0] != '!')
-									tk->cmd(t, ".cf.c create image 0 0 -anchor nw -image " + imgname);
-							}
 							zoom = 1.0;
 							zoomtxt = "Zoom: 100%";
 							tk->cmd(t, ".zb.zl configure -text {" + zoomtxt + "}");
-							scrollw = backing.r.max.x;
-							scrollh = backing.r.max.y;
-							tk->cmd(t, ".cf.c configure -scrollregion {0 0 " + string scrollw + " " + string scrollh + "}");
+							bpp = (backing.depth + 7) / 8;
+							(view, vieww, viewh, imgmade, scrollw, scrollh) = render(t, tk, display, backing, zoom, imgname, imgmade, bpp);
 						}
 					}
 				}
 			"clear" =>
 				tk->cmd(t, ".cf.c delete all");
 				backing.draw(backing.r, display.white, nil, (0, 0));
+				(view, vieww, viewh, imgmade, scrollw, scrollh) = render(t, tk, display, backing, zoom, imgname, imgmade, bpp);
 			"color" =>
 				tkcolor = hd tl args;
 				case tkcolor {
@@ -201,28 +305,20 @@ init(ctxt: ref Draw->Context, nil: list of string)
 				if(newz > 4.0)
 					newz = 4.0;
 				if(newz != zoom) {
-					f := newz/zoom;
-					tk->cmd(t, ".cf.c scale all 0 0 " + string f + " " + string f);
 					zoom = newz;
 					zoomtxt = "Zoom: " + string int (zoom * 100.0) + "%";
 					tk->cmd(t, ".zb.zl configure -text {" + zoomtxt + "}");
-					scrollw = int (real backing.r.max.x * zoom);
-					scrollh = int (real backing.r.max.y * zoom);
-					tk->cmd(t, ".cf.c configure -scrollregion {0 0 " + string scrollw + " " + string scrollh + "}");
+					(view, vieww, viewh, imgmade, scrollw, scrollh) = render(t, tk, display, backing, zoom, imgname, imgmade, bpp);
 				}
 			"zoomout" =>
 				newz := zoom / 1.25;
 				if(newz < 0.25)
 					newz = 0.25;
 				if(newz != zoom) {
-					f := newz/zoom;
-					tk->cmd(t, ".cf.c scale all 0 0 " + string f + " " + string f);
 					zoom = newz;
 					zoomtxt = "Zoom: " + string int (zoom * 100.0) + "%";
 					tk->cmd(t, ".zb.zl configure -text {" + zoomtxt + "}");
-					scrollw = int (real backing.r.max.x * zoom);
-					scrollh = int (real backing.r.max.y * zoom);
-					tk->cmd(t, ".cf.c configure -scrollregion {0 0 " + string scrollw + " " + string scrollh + "}");
+					(view, vieww, viewh, imgmade, scrollw, scrollh) = render(t, tk, display, backing, zoom, imgname, imgmade, bpp);
 				}
 			"b1down" =>
 				if(len args >= 3) {
@@ -234,7 +330,11 @@ init(ctxt: ref Draw->Context, nil: list of string)
 					rx := int (real lastx / zoom);
 					ry := int (real lasty / zoom);
 					backing.draw(Rect((rx, ry), (rx + 5, ry + 5)), drawcolor, nil, (0, 0));
-					tk->cmd(t, ".cf.c create line " + string lastx + " " + string lasty + " " + string lastx + " " + string lasty + " -fill " + tkcolor);
+					if(zoom == 1.0) {
+						tk->cmd(t, ".cf.c create line " + string lastx + " " + string lasty + " " + string lastx + " " + string lasty + " -fill " + tkcolor);
+					} else {
+						(view, vieww, viewh, imgmade, scrollw, scrollh) = render(t, tk, display, backing, zoom, imgname, imgmade, bpp);
+					}
 				}
 			"b1move" =>
 				if(len args >= 3) {
@@ -249,7 +349,11 @@ init(ctxt: ref Draw->Context, nil: list of string)
 					backing.line((rx0, ry0), (rx1, ry1), 0, 0, 0, drawcolor, (0, 0));
 					lastx = x;
 					lasty = y;
-					tk->cmd(t, ".cf.c create line " + string lastx + " " + string lasty + " " + string x + " " + string y + " -fill " + tkcolor);
+					if(zoom == 1.0) {
+						tk->cmd(t, ".cf.c create line " + string lastx + " " + string lasty + " " + string x + " " + string y + " -fill " + tkcolor);
+					} else {
+						(view, vieww, viewh, imgmade, scrollw, scrollh) = render(t, tk, display, backing, zoom, imgname, imgmade, bpp);
+					}
 				}
 			}
 		}
