@@ -14,6 +14,10 @@ str: String;
 include "selectfile.m";
 selectfile: Selectfile;
 
+Colors: module {
+	init: fn(ctxt: ref Draw->Context, c: chan of int);
+};
+
 Tkpaint: module
 {
 	init: fn(ctxt: ref Draw->Context, argv: list of string);
@@ -254,7 +258,7 @@ init(ctxt: ref Draw->Context, nil: list of string)
 		sys->fprint(sys->fildes(2), "tkpaint: no window context\n");
 		raise "fail:bad context";
 	}
-	(t, menubut) := tkclient->toplevel(ctxt, "", "Tk Paint", Tkclient->Appl);
+	(t, menubut) := tkclient->toplevel(ctxt, "", "Paint", Tkclient->Appl);
 
 	cmdchan := chan of string;
 	tk->namechan(t, cmdchan, "cmd");
@@ -275,6 +279,7 @@ init(ctxt: ref Draw->Context, nil: list of string)
 	tk->cmd(t, ".mb.file.menu add command -label Open... -command {send cmd open}");
 	tk->cmd(t, ".mb.file.menu add command -label Save -command {send cmd save}");
 	tk->cmd(t, "menu .mb.view.menu");
+	tk->cmd(t, ".mb.view.menu add command -label Colors -command {send cmd colors}");
 	tk->cmd(t, "menu .mb.view.menu.zoom");
 	tk->cmd(t, ".mb.view.menu add cascade -label Zoom -menu .mb.view.menu.zoom");
 	tk->cmd(t, ".mb.view.menu.zoom add command -label {Zoom In} -command {send cmd zoomin}");
@@ -342,8 +347,16 @@ init(ctxt: ref Draw->Context, nil: list of string)
 	stop := chan of int;
 	spawn tkclient->handler(t, stop);
 
+	colorchan := chan of int;
+	
 	for(;;) {
 		alt {
+		col := <-colorchan =>
+			#sys->print("#%.8uX\n",col);
+			drawcolor = display.color(col);
+			# Also update tkcolor if possible, though tkpaint separates them
+			# tkcolor is used for line fills in tk canvas, which needs string
+			#tkcolor = col; 
 		menu := <- menubut =>
 			if(menu == "exit") {
 				stop <- = 1;
@@ -388,6 +401,13 @@ init(ctxt: ref Draw->Context, nil: list of string)
 							(view, vieww, viewh, imgmade, scrollw, scrollh) = render(t, tk, display, backing, zoom, imgname, imgmade, bpp);
 						}
 					}
+				}
+			"colors" =>
+				cmod := load Colors "colors.dis";
+				if(cmod == nil) {
+					sys->print("tkpaint: cannot load colors: %r\n");
+				} else {
+					spawn cmod->init(ctxt, colorchan);
 				}
 			"clear" =>
 				tk->cmd(t, ".cf.c delete all");

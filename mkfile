@@ -1,6 +1,7 @@
 <$ROOT/mkconfig
 
-TARG=tkpaint.dis
+TARG=tkpaint.dis\
+	colors.dis
 
 MODULES=\
 
